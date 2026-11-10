@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 모델 체크포인트·학습 산출물
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+runs/
+
+# 환경·에디터
+.env
+.vscode/
+.idea/
