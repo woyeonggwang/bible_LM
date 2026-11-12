@@ -27,9 +27,9 @@
 - [x] 3. Self-Attention
 - [x] 4. Multi-Head Attention + FeedForward
 - [x] 5. Transformer 블록 쌓기 (Residual + LayerNorm)
-- [x] 6. 학습 다듬기 (GPU, Dropout, 체크포인트, 파일 분리) — LR 스케줄은 아직
+- [x] 6. 학습 다듬기 (GPU, Dropout, 체크포인트, 파일 분리, warmup + cosine LR 스케줄)
 - [x] 7. (심화) BPE 토크나이저
-- [ ] 8. (선택) 자동미분 엔진
+- [x] 8. (선택) 자동미분 엔진
 
 ## 파일 구조
 | 파일 | 역할 |
@@ -39,6 +39,8 @@
 | `generate.py` | 저장된 모델을 불러와 프롬프트 뒤로 문장 생성 |
 | `bpe.py` | BPE 토크나이저 학습·encode·decode·저장 (`bpe.json`) |
 | `attention_test.py` | Self-Attention 원리 실험 (평균 → 행렬 곱 → softmax, Q/K/V) |
+| `autograd.py` | 자동미분 엔진 직접 구현 (`Value` 클래스, 역전파) |
+| `mlp.py` | 직접 만든 엔진만으로 작은 신경망(MLP) 학습 |
 
 ## 결과 비교
 loss 는 글자당 val 기준 (BPE 는 토큰당 loss ÷ 토큰당 글자 수 2.69 로 환산)
@@ -52,7 +54,9 @@ loss 는 글자당 val 기준 (BPE 는 토큰당 loss ÷ 토큰당 글자 수 2.
 | 6 | 2.7M 파라미터, 글자 단위 | GPU, 5,000 스텝, 3.0분 | 1.3141 |
 | 6 | 같은 모델 | GPU, 20,000 스텝, 15.2분 | 1.1898 |
 | 7 | 2.9M 파라미터, BPE(vocab 574) | GPU, 5,000 스텝, 3.6분 | 1.0955 |
-| 7 | 같은 모델 | GPU, 20,000 스텝, 15.2분 | **1.0606** (16,000 스텝 최저) |
+| 7 | 같은 모델 | GPU, 20,000 스텝, 15.2분 | 1.0606 (16,000 스텝 최저) |
+| 7 | 같은 모델 + warmup·cosine (lr 3e-4→3e-5) | GPU, 15,000 스텝, 9.3분 | 1.0637 |
+| 7 | 같은 모델 + warmup·cosine (lr 1e-3→1e-4) | GPU, 15,000 스텝, 9.1분 | **1.0562** (14,500 스텝 최저) |
 
 생성 예시 (BPE 모델):
 ```
@@ -96,3 +100,15 @@ loss 는 글자당 val 기준 (BPE 는 토큰당 loss ÷ 토큰당 글자 수 2.
 
 **시행착오**
 - `LanguageModel` 로 바꾼 뒤 `model.generate` 에서 `AttributeError` → `generate` 가 `BigramModel` 에만 있었음. `LanguageModel` 에 최근 block_size 글자만 잘라 넣는 `generate` 를 추가해 해결 (위치 임베딩이 block_size 개뿐이라 그보다 길면 안 됨)
+
+### 2026-11-12
+**한 일**
+- `train.py` 에 warmup(500 스텝) + cosine decay 학습률 스케줄 추가, val 최저 시점에만 체크포인트 저장
+- LR 실험: 최대 lr 3e-4 는 고정 lr 대비 val 개선 없음(대신 과적합은 덜함). 최대 lr 1e-3 은 같은 성능에 절반의 스텝으로 도달, 최저 val 글자당 1.0562 로 최고 기록이지만 개선 폭은 작음
+- 8단계: 자동미분 엔진(`Value` 클래스) 직접 구현. PyTorch 와 기울기가 소수점 16자리까지 일치. 이 엔진만으로 작은 신경망(MLP)을 학습시켜 loss 0.49 → 0.01
+
+**배운 점**
+- 학습률을 바꾸면 도달 속도는 빨라지지만 최저 val 은 거의 같음 → 지금 병목은 최적화가 아니라 데이터 양(과적합)
+- 학습률 스케줄을 쓸 때는 평균 학습률이 낮아지므로 최대 학습률을 더 높게 잡는 것이 일반적
+- 역전파는 연쇄 법칙의 반복. 연산마다 "재료에게 기울기를 나눠주는 법"만 기록해 두면 결과에서 거꾸로 따라가며 곱하면 됨
+- PyTorch 학습 루프의 zero_grad / backward / step 은 각각 "기울기 0으로", "역전파", "기울기 반대로 이동"과 같은 일
